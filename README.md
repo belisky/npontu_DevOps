@@ -1,4 +1,5 @@
 # Php CD Pipeline
+![npontu_devops](https://github.com/belisky/npontu_DevOps/assets/61013338/f21f41e9-9429-4bcf-9e36-5fc0d6460039)
 
 - The DB is setup using master-slave replication in mysql using Ansible roles to Implement Availability support.
 - The Docker image of the Application is built using Jenkins and pushed to DockerHub.
