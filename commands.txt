@@ -1,0 +1,2 @@
+# copy public key to remote
+cat ~/.ssh/id_rsa.pub | ssh -i aws.pem ubuntu@ip_address "cat - >> ~/.ssh/authorized_keys2"

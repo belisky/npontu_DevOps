@@ -1,0 +1,302 @@
+---
+- name: Add the OS specific variables
+  include_vars: Ubuntu.yml
+
+# - name: Uninstalling Mysql  and dependencies
+#   shell: 'sudo apt purge -y mysql-server mysql-client mysql-common mysql-server-core-* mysql-client-core-* && sudo rm -r /etc/mysql /var/lib/mysql'
+
+- name: Installing Mysql  and dependencies
+  package:
+    name: "{{item}}"
+    state: present
+    update_cache: yes
+  loop:
+    - mysql-server
+    - mysql-client 
+    - python3-mysqldb
+    - libmysqlclient-dev
+  become: true
+  become_method: sudo
+  
+
+- name: Copy the my.cnf file
+  template:
+    src: my.cnf.Ubuntu.j2
+    dest: "{{ mysql_conf_dir }}/mysql.cnf"
+  notify:
+   - restart mysql
+  become: true
+  become_method: sudo
+
+- name: Create the directory /etc/mysql/conf.d
+  file:
+    path: /etc/mysql/conf.d
+    state: directory
+  notify:
+   - restart mysql
+  become: true
+  become_method: sudo 
+
+- name: Deploy mysql config to conf.d
+  template:
+    src: mysql.cnf.j2
+    dest: /etc/mysql/conf.d/mysql.cnf 
+  notify:
+   - restart mysql
+  become: true
+  become_method: sudo
+  
+
+- name: Copy .my.cnf file with root password credentials
+  template:
+    src: .my.cnf.j2
+    dest: ~/.my.cnf 
+  become: true
+  become_method: sudo
+
+# - name: "Comment out the line"
+#   replace:
+#     path: /etc/mysql/mysql.c/mysql.cnf
+#     regexp: 'Comment me out'
+#     replace: '#Comment me out'
+
+
+- name: Start the mysql services
+  service:
+    name: "{{ mysql_service }}"
+    state: started
+    enabled: yes 
+  become: true
+  become_method: sudo
+
+- name: Update mysql root password for all root accounts
+  mysql_user:
+    name: root
+    host: "{{ item }}"
+    password: "{{ mysql_root_db_pass }}"  
+  with_items:
+   - "{{ ansible_hostname }}"
+   - 127.0.0.1 
+   - ::1
+   - localhost
+  when: 
+  - ansible_hostname != 'localhost' 
+  become: true
+  become_method: sudo
+
+- name: Update mysql root password for all root accounts
+  mysql_user:
+    name: root
+    host: "{{ item }}"  
+    password: "{{ mysql_root_db_pass }}"
+  with_items:
+   - 127.0.0.1  
+   - ::1
+   - localhost
+  when: 
+  - ansible_hostname == 'localhost' 
+  become: true
+  become_method: sudo 
+
+- name: Ensure anonymous users are not in the database
+  mysql_user:
+    name: ''
+    host: "{{ item }}"
+    state: absent
+  with_items:
+   - localhost
+   - "{{ ansible_hostname }}"
+  become: true
+  become_method: sudo
+
+- name: Remove the test database
+  mysql_db:
+    name: test
+    state: absent
+  become: true
+  become_method: sudo
+
+- name: Create the replication users
+  mysql_user:
+    name: "{{ mysql_repl_user[0].name }}"
+    host: '%'
+    password: "{{ item.pass|default('verystrong') }}"
+    priv: "*.*:REPLICATION SLAVE,REPLICATION CLIENT"
+    state: present 
+  become: true
+  become_method: sudo
+
+- name: Check if slave is already configured for replication
+  mysql_replication:
+    mode: getreplica
+    login_user: root
+    login_password: "{{ mysql_root_db_pass }}"
+  ignore_errors: true
+  register: slave 
+  when: mysql_repl_role == 'slave'
+  become: true
+  become_method: sudo 
+
+- name: Ensure the hostname entry for master is available for the client.
+  lineinfile:
+    dest: /etc/hosts 
+    regexp: "{{ db_master }}"
+    line: "{{ hostvars[db_master].ansible_default_ipv4.address + '   ' + db_master }}"
+    state: present
+  when: 
+    # - slave is search("Server is not configured as mysql replica") and 
+    - mysql_repl_role == 'slave' 
+    # and mysql_repl_master is defined
+  become: true
+  become_method: sudo 
+
+# - name: Ensure the hostname entry for master is available for the client.
+#   lineinfile:
+#     dest: /etc/mysql/mysql.conf.d/mysql.cnf
+#     regexp: "{{ db_master }}"
+#     line: "{{ hostvars[db_master].ansible_default_ipv4.address + '   ' + db_master }}"
+#     state: present
+#   when: 
+#     # - slave is search("Server is not configured as mysql replica") and 
+#     - mysql_repl_role == 'slave' 
+#     # and mysql_repl_master is defined
+#   become: true
+#   become_method: sudo 
+
+
+- mysql_replication:
+    mode: stopreplica
+  when: mysql_repl_role == 'slave' 
+  become: true
+  become_method: sudo
+
+- name: Get the current master servers replication status
+  mysql_replication:
+    mode: getprimary 
+  delegate_to: "{{ db_master }}"   
+  register: repl_stat
+  when: mysql_repl_role == 'slave' 
+  become: true
+  become_method: sudo
+
+- name: Change the master in slave to start the replication
+  mysql_replication:
+    mode: changeprimary
+    master_host: "{{ db_master }}"
+    master_log_file: "{{ repl_stat.File }}"
+    master_log_pos: "{{ repl_stat.Position }}"
+    master_user: "{{ mysql_repl_user[0].name }}"
+    master_password: "{{ mysql_repl_user[0].pass }}"
+  when: 
+    # - slave is search("Server is not configured as mysql replica") and 
+    - mysql_repl_role == 'slave' 
+# and mysql_repl_master is defined
+  become: true
+  become_method: sudo
+
+- name: Create the database's
+  mysql_db:
+    name: "{{ item.name }}"  
+    state: present
+  with_items:
+    - "{{ mysql_db }}"
+  when: mysql_db|lower() != 'none'
+  become: true
+  become_method: sudo
+
+
+
+- name: Prints result of getprimary command
+  debug:
+    var: repl_stat
+
+- name: Prints result of getprimary command
+  debug:
+    var: slave
+    
+
+- name: Create the database users
+  mysql_user:
+    name: "{{ item.name }}"
+    password: "{{ item.pass|default('verystrong') }}"
+    priv: "{{ item.priv|default('*.*:ALL') }}"
+    state: present
+    host: "{{ item.host | default('localhost') }}"
+  with_items:
+    - "{{ mysql_users }}"
+  when: mysql_users|lower() != 'none'
+  become: true
+  become_method: sudo
+
+- name: Start replication.
+  mysql_replication:
+    mode: startreplica
+  when: mysql_repl_role == 'slave'
+  become: true
+  become_method: sudo
+    # - (slave.Is_Slave is defined and slave.Is_Slave) or (slave.Is_Replica is defined and slave.Is_Replica) or (slave.Is_Slave is not defined and slave.Is_Replica is not defined and slave is failed)
+    
+ 
+ 
+ 
+
+# ---
+# - name: Ensure replication user exists on master.
+#   mysql_user:
+#     name: "{{ mysql_replication_user.name }}"
+#     host: "{{ mysql_replication_user.host | default('%') }}"
+#     password: "{{ mysql_replication_user.password }}"
+#     priv: "{{ mysql_replication_user.priv | default('*.*:REPLICATION SLAVE,REPLICATION CLIENT') }}"
+#     state: present
+#   when:
+#     - mysql_replication_role == 'master'
+#     - mysql_replication_user.name is defined
+#     - (mysql_replication_master | length) > 0
+#   tags: ['skip_ansible_galaxy']
+
+# - name: Check slave replication status.
+#   mysql_replication:
+#     mode: getreplica
+#     login_user: "{{ mysql_root_username }}"
+#     login_password: "{{ mysql_root_password }}"
+#   ignore_errors: true
+#   register: slave
+#   when:
+#     - mysql_replication_role == 'slave'
+#     - (mysql_replication_master | length) > 0
+#   tags: ['skip_ansible_galaxy']
+
+# - name: Check master replication status.
+#   mysql_replication:
+#     mode: getprimary
+#   delegate_to: "{{ mysql_replication_master_inventory_host }}"
+#   register: master
+#   when:
+#     - (slave.Is_Slave is defined and not slave.Is_Slave) or (slave.Is_Replica is defined and not slave.Is_Replica) or (slave.Is_Slave is not defined and slave.Is_Replica is not defined and slave is failed)
+#     - mysql_replication_role == 'slave'
+#     - (mysql_replication_master | length) > 0
+#   tags: ['skip_ansible_galaxy']
+
+# - name: Configure replication on the slave.
+#   mysql_replication:
+#     mode: changeprimary
+#     master_host: "{{ mysql_replication_master }}"
+#     master_user: "{{ mysql_replication_user.name }}"
+#     master_password: "{{ mysql_replication_user.password }}"
+#     master_log_file: "{{ master.File }}"
+#     master_log_pos: "{{ master.Position }}"
+#   ignore_errors: true
+#   when:
+#     - (slave.Is_Slave is defined and not slave.Is_Slave) or (slave.Is_Replica is defined and not slave.Is_Replica) or (slave.Is_Slave is not defined and slave.Is_Replica is not defined and slave is failed)
+#     - mysql_replication_role == 'slave'
+#     - mysql_replication_user.name is defined
+#     - (mysql_replication_master | length) > 0
+
+# - name: Start replication.
+#   mysql_replication:
+#     mode: startreplica
+#   when:
+#     - (slave.Is_Slave is defined and slave.Is_Slave) or (slave.Is_Replica is defined and slave.Is_Replica) or (slave.Is_Slave is not defined and slave.Is_Replica is not defined and slave is failed)
+#     - mysql_replication_role == 'slave'
+#     - (mysql_replication_master | length) > 0
+#   tags: ['skip_ansible_galaxy']

@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Form Input to MySQL Database</title>
+</head>
+<body>
+    <h1>Hello Npontu</h1>
+    <div>
+        <h2>Enter your information:</h2>
+        <form method="post" 
+        action="<?php echo htmlspecialchars($_SERVER["PHP_SELF"]); ?>"
+        >
+            <label for="name">Name:</label>
+            <input type="text" id="name" name="name" required><br><br>
+            
+            <label for="email">Email:</label>
+            <input type="email" id="email" name="email" required><br><br>
+            
+            <input type="submit" value="Submit">
+        </form>
+    </div>
+
+    <?php
+    // Set up MySQL database connection
+    $servername = "54.161.207.117";
+    $username = "user1";
+    $password = "verystrong";
+    $dbname = "example_db1";
+    $port=3306;
+    
+    // Create connection
+    $conn = new mysqli($servername, $username, $password, $dbname,$port);
+    
+    // Check connection
+    if ($conn->connect_error) {
+        die("Connection failed: " . $conn->connect_error);
+    }
+    
+    // Check if the form is submitted
+    if ($_SERVER["REQUEST_METHOD"] == "POST") {
+        // Retrieve form data
+        $name = $_POST["name"];
+        $email = $_POST["email"];
+        
+        // Prepare the SQL statement
+        $sql = "INSERT INTO example_db1(Name, Email) VALUES ('$name', '$email')";
+        
+        // Execute the SQL statement
+        if ($conn->query($sql) === TRUE) {
+            echo "New record inserted successfully.";
+        } else {
+            echo "Error: " . $sql . "<br>" . $conn->error;
+        }
+    }
+    
+    // Close the database connection
+    $conn->close();
+    ?>
+    
+
+</body>
+</html>
